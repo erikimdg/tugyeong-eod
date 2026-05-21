@@ -430,6 +430,11 @@ def check_warning_stock(name, today=None):
                 f"⚠ 거래정지 트리거: 종가 ≥ {h['price']:,.0f}원 ({halt_pct:+.1f}%) "
                 f"[상한가 {h['sanghan']:,}원]"
             )
+            effective = min(calc["binding"], h["price"])
+            effective_pct = (effective / today_close - 1) * 100
+            lines.append(
+                f"실효 해제 임계가 (보수): < {effective:,.0f}원 ({effective_pct:+.1f}% 미만)"
+            )
         else:
             lines.append(
                 f"거래정지 트리거: {h['price']:,.0f}원 ({halt_pct:+.1f}%) — "
