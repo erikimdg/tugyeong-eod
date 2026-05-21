@@ -142,11 +142,18 @@ def classify_disclosure(title):
     return None
 
 
-def find_relevant_disclosures(disclosures):
-    """Return (latest_release, latest_designation)."""
+def find_relevant_disclosures(disclosures, cutoff_date=None):
+    """Return (latest_release, latest_designation). cutoff_date로 백테스트 시점 필터."""
     latest_release = None
     latest_designation = None
     for d in disclosures:
+        if cutoff_date is not None:
+            try:
+                d_date = datetime.fromisoformat(d["datetime"]).date()
+                if d_date > cutoff_date:
+                    continue
+            except (ValueError, KeyError):
+                continue
         cat = classify_disclosure(d.get("title", ""))
         if cat == "release" and latest_release is None:
             latest_release = d
@@ -301,7 +308,7 @@ def check_warning_stock(name, today=None):
     lines.append(f"다음 거래일: {_fmt_date(tomorrow)}")
 
     disclosures = fetch_disclosures(code)
-    rel, des = find_relevant_disclosures(disclosures)
+    rel, des = find_relevant_disclosures(disclosures, cutoff_date=today)
 
     if not rel and not des:
         lines.append("")
@@ -439,11 +446,14 @@ def main():
     name = sys.argv[1]
     try:
         print(check_warning_stock(name))
-    except Exception as e:
+    except ValueError as e:
         print(f"에러: {e}", file=sys.stderr)
+        sys.exit(2)
+    except Exception as e:
+        print(f"예상치 못한 에러: {type(e).__name__}: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
-        sys.exit(2)
+        sys.exit(3)
 
 
 if __name__ == "__main__":
