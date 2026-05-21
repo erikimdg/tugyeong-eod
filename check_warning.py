@@ -407,7 +407,7 @@ def check_warning_stock(name, today=None):
     binding_kind = ["cond1", "cond2", "cond3"][
         [calc["cond1"], calc["cond2"], calc["cond3"]].index(calc["binding"])
     ]
-    lines.append(f"binding ({binding_kind}): {calc['binding']:,.0f}원")
+    lines.append(f"해제 임계가 ({binding_kind}): {calc['binding']:,.0f}원")
 
     pct_chg = (calc["binding"] / today_close - 1) * 100
     lines.append("")
