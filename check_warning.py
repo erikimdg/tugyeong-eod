@@ -239,6 +239,23 @@ def find_risk_escalation(disclosures, after_date=None, cutoff_date=None):
     return None
 
 
+def find_share_restructure(disclosures, after_date=None, cutoff_date=None):
+    """액면병합/분할/주식병합 등 가격 정합이 깨지는 이벤트 감지."""
+    for d in disclosures:
+        try:
+            d_date = datetime.fromisoformat(d["datetime"]).date()
+        except (ValueError, KeyError):
+            continue
+        if after_date and d_date <= after_date:
+            continue
+        if cutoff_date and d_date > cutoff_date:
+            continue
+        title = d.get("title", "") or ""
+        if "변경상장" in title and ("액면" in title or "병합" in title or "분할" in title):
+            return d
+    return None
+
+
 def parse_korean_date(s, ref_year=None, ref_month=None):
     m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일", s)
     if m:
@@ -446,6 +463,14 @@ def check_warning_stock(name, today=None):
         lines.append("")
         lines.append(f"⚠ 투자위험종목 격상 감지: {risk_esc['datetime'][:10]} {risk_esc['title']}")
         lines.append("→ 투자경고 분석은 무효. 투자위험종목 별도 처리 필요.")
+        return "\n".join(lines)
+
+    # 액면병합/분할 등 가격 정합 깨지는 이벤트 감지
+    restructure = find_share_restructure(disclosures, after_date=des_date, cutoff_date=today)
+    if restructure:
+        lines.append("")
+        lines.append(f"⚠ 주식 구조변경(액면병합/분할 등) 감지: {restructure['datetime'][:10]} {restructure['title']}")
+        lines.append("→ 변경상장 전후 가격이 fchart에 액면조정 없이 들어있어 시계열 비교 무효.")
         return "\n".join(lines)
 
     lines.append("")
