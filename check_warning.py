@@ -484,14 +484,24 @@ def check_warning_stock(name, today=None):
     ]
     newest_kind = max(present, key=lambda x: _disc_datetime(x[0]))[1]
     if newest_kind == "predesignation":
-        lines += _predesignation_report(
+        rep = _predesignation_report(
             name, code, price_code, disclosure_code, pre, today, tomorrow, disclosures
         )
+        if rep is None:  # 판단기간 만료 → 공시 없는 종목과 동일 출력
+            lines.append("")
+            lines.append("상태: 투자경고 관련 공시 없음")
+        else:
+            lines += rep
         return "\n".join(lines)
     if newest_kind == "release_redesig":
-        lines += _redesignation_report(
+        rep = _redesignation_report(
             name, code, price_code, disclosure_code, redesig, today, tomorrow, disclosures
         )
+        if rep is None:  # 재지정 판단기간 만료 → 공시 없는 종목과 동일 출력
+            lines.append("")
+            lines.append("상태: 투자경고 관련 공시 없음")
+        else:
+            lines += rep
         return "\n".join(lines)
 
     latest_is_release = False
@@ -770,10 +780,14 @@ def parse_redesignation_notice(text):
 
 def _redesignation_report(name, code, price_code, disclosure_code, redesig, today, tomorrow, disclosures):
     """'지정해제 및 재지정 예고' → 해제 안내 + 재지정 트리거 가격 리포트."""
-    lines = []
     text = html_to_text(fetch_disclosure_detail(disclosure_code, redesig["disclosureId"]))
     p = parse_redesignation_notice(text)
 
+    # 재지정 판단기간(순연 마감)이 지난 옛 공시 → 비활성: None 반환 → '공시 없음'과 동일 출력
+    if p["순연_마감일"] and tomorrow > p["순연_마감일"]:
+        return None
+
+    lines = []
     lines.append("")
     lines.append(f"최신 공시: {redesig['title']}")
     lines.append(f"공시일시: {redesig['datetime']}")
@@ -816,9 +830,29 @@ def _redesignation_report(name, code, price_code, disclosure_code, redesig, toda
                 vd, vc = dd, cc
         return vd, vc
 
+    T = max(next_trading_day(prices[-1][0]), p["최초_판단일"])  # 재지정 판단일
+    last_date, last_close = prices[-1]
+    # 판단일 T가 마지막 확정 종가일에서 몇 거래일 뒤인지
+    gap = 0
+    d = T
+    while d > last_date:
+        d = prev_trading_day(d)
+        gap += 1
+    rel_txt = f"{p['해제일'].month}/{p['해제일'].day}" if p["해제일"] else "해제"
+    Tstr = f"{T.month}/{T.day}"
+
+    # 판단일이 2거래일 이상 남았으면(=다음 종가가 판단일이 아니면) 날짜만 안내
+    if gap >= 2:
+        lines.append("")
+        lines.append(f"▶ {_fmt_date(T)} 판단 (현재 {gap}거래일 전 — 구체 트리거 가격은 판단 1거래일 전부터 산출)")
+        lines.append("")
+        lines.append("=== 안내 문구 (복붙용) ===")
+        lines.append(f"{name} : {rel_txt} 투자경고 해제 → {Tstr} 재지정 판단 (구체 트리거는 판단 임박 시 산출)")
+        return lines
+
+    # gap == 1: 다음 거래일 종가가 곧 판단일 → 구체 계산 + 상한가 도달 여부
     g_d, g = close_on_or_before(p["지정전일"])      # ① 지정 전일 종가
     r_d, r = close_on_or_before(p["해제전일"])      # ② 해제 전일 종가
-    T = max(next_trading_day(prices[-1][0]), p["최초_판단일"])  # 재지정 판단일
     t2_date = prev_trading_day(prev_trading_day(T))
     t2_d, t2c = close_on_or_before(t2_date)
     if None in (g, r, t2c):
@@ -833,35 +867,33 @@ def _redesignation_report(name, code, price_code, disclosure_code, redesig, toda
         ("③", f"T-2({t2_d}) {t2c:,} × {1+pct:.2f}", t2c * (1 + pct), False),
     ]
     trig_sym, trig_desc, trig, trig_strict = max(conds, key=lambda x: x[2])
-    last_close = prices[-1][1]
     cmp = "이상" if not trig_strict else "초과"
-    # 판단일 T가 마지막 확정 종가일에서 며칠(거래일) 뒤인지
-    gap = 0
-    d = T
-    while d > prices[-1][0]:
-        d = prev_trading_day(d)
-        gap += 1
+    sanghan = floor_to_tick(last_close * 1.3)   # T-1 종가 기준 당일(T) 상한가
+    reachable = trig <= sanghan
 
     lines.append("")
-    lines.append(f"판단일(T) = {_fmt_date(T)} 기준 (재지정 판단)  |  마지막 확정 종가 {last_close:,}원 [{prices[-1][0]}], T는 {gap}거래일 후")
+    lines.append(f"판단일(T) = {_fmt_date(T)} (다음 거래일 = 판단일)  |  T-1 종가 {last_close:,}원 [{last_date}]")
     for sym, desc, val, strict in conds:
         lines.append(f"  {sym} {desc} = {val:,.0f}원")
     lines.append(f"  ④ 합산 시총 100위 밖 — 통상 충족 (정밀순위는 KRX)")
+    reach_txt = "도달가능" if reachable else "이번 판단일 도달불가 (상한가 초과)"
     lines.append(
         f"  ▶ 재지정 트리거({trig_sym}): 종가 {trig:,.0f}원 {cmp}  "
-        f"(마지막 확정 종가 {last_close:,} 대비 {(trig/last_close-1)*100:+.2f}%)"
+        f"(T-1 대비 {(trig/last_close-1)*100:+.2f}%)  | {Tstr} 상한가 {sanghan:,}원 → {reach_txt}"
     )
-    if gap >= 2:
-        lines.append(f"     ※ 판단일이 {gap}거래일 후라 일일 상한가(+30%) {gap}회로 도달 가능 — 단일 상한가로 판단 불가")
 
     lines.append("")
     lines.append("=== 안내 문구 (복붙용) ===")
-    rel_txt = f"{p['해제일'].month}/{p['해제일'].day}" if p["해제일"] else "해제"
-    Tstr = f"{T.month}/{T.day}"
-    lines.append(
-        f"{name} : {rel_txt} 투자경고 해제, 단 {Tstr}부터 종가 {trig:,.0f}원 {cmp} 마감 시 "
-        f"투경 재지정 (가격 요건만 — 소수계좌 무관)"
-    )
+    if reachable:
+        lines.append(
+            f"{name} : {rel_txt} 투자경고 해제, {Tstr} 종가 {trig:,.0f}원 {cmp} 마감 시 "
+            f"투경 재지정 (가격 요건만 — 소수계좌 무관)"
+        )
+    else:
+        lines.append(
+            f"{name} : {rel_txt} 투자경고 해제, 재지정 트리거 {trig:,.0f}원이나 "
+            f"{Tstr} 상한가({sanghan:,}원) 초과로 {Tstr}엔 재지정 불가 (이후 추가 상승 필요)"
+        )
     return lines
 
 
@@ -922,11 +954,15 @@ def parse_predesignation_notice(text):
 
 def _predesignation_report(name, code, price_code, disclosure_code, pre, today, tomorrow, disclosures):
     """지정예고 공시 → 판단일 T 지정 요건/임계가 리포트 라인 리스트."""
-    lines = []
     contents = fetch_disclosure_detail(disclosure_code, pre["disclosureId"])
     text = html_to_text(contents)
     parsed = parse_predesignation_notice(text)
 
+    # 판단기간(순연 마감)이 지난 옛 지정예고 → 비활성: None 반환 → '공시 없음'과 동일 출력
+    if parsed["순연_마감일"] and tomorrow > parsed["순연_마감일"]:
+        return None
+
+    lines = []
     lines.append("")
     lines.append(f"최신 공시: {pre['title']}")
     lines.append(f"공시일시: {pre['datetime']}")
@@ -936,6 +972,7 @@ def _predesignation_report(name, code, price_code, disclosure_code, pre, today, 
         lines.append(f"최초 판단일: {_fmt_date(parsed['최초_판단일'])}")
     if parsed["순연_마감일"]:
         lines.append(f"순연 마감(판단 종료): {_fmt_date(parsed['순연_마감일'])}")
+
     if not parsed["paths"]:
         lines.append("")
         lines.append("지정요건 파싱 실패 — 본문 수동 확인 필요")
